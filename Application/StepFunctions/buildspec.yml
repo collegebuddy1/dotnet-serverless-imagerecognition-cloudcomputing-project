@@ -1,0 +1,49 @@
+version: 0.2
+
+env:
+    parameter-store:
+        S3_BUCKET: "/ImageRecognition/ImageRecognitionArtifactStore"
+phases:
+  install:
+    commands:
+      - yum update -y && yum install -y clang krb5-devel openssl-devel libicu llvm zip
+      - yum install -y tar gzip
+      - curl -LO https://dot.net/v1/dotnet-install.sh
+      - chmod +x dotnet-install.sh
+      - ./dotnet-install.sh -Channel 7.0 -Version latest
+      - export PATH=/root/.dotnet:$PATH
+      - dotnet tool install -g Amazon.Lambda.Tools
+      - export PATH="$PATH:/root/.dotnet/tools"
+  build:
+    commands:
+      - cd ./Application/StepFunctions/
+      - dotnet publish "extract-image-metadata/extract-image-metadata.csproj" -r linux-x64 -c Release --self-contained true --output "extract-image-metadata/publish"
+      - cp "extract-image-metadata/publish/bootstrap" bootstrap
+      - zip extract-image-metadata.zip bootstrap
+      - rm bootstrap
+
+      - dotnet publish "rekognition/rekognition.csproj" -r linux-x64 -c Release --self-contained true --output "rekognition/publish"
+      - cp "rekognition/publish/bootstrap" bootstrap
+      - zip rekognition.zip bootstrap
+      - rm bootstrap
+
+      - dotnet publish "store-image-metadata/store-image-metadata.csproj" -r linux-x64 -c Release --self-contained true --output "store-image-metadata/publish"
+      - cp "store-image-metadata/publish/bootstrap" bootstrap
+      - zip store-image-metadata.zip bootstrap
+      - rm bootstrap
+
+      - dotnet publish "thumbnail/thumbnail.csproj" -r linux-x64 -c Release --self-contained true --output "thumbnail/publish"
+      - cp "thumbnail/publish/bootstrap" bootstrap
+      - zip thumbnail.zip bootstrap
+      - rm bootstrap
+
+      - dotnet publish "transform-metadata/transform-metadata.csproj" -r linux-x64 -c Release --self-contained true --output "transform-metadata/publish"
+      - cp "transform-metadata/publish/bootstrap" bootstrap
+      - zip transform-metadata.zip bootstrap
+      - rm bootstrap
+
+      - dotnet lambda package-ci --template serverless.template --output-template updated.template --s3-bucket $S3_BUCKET --s3-prefix StepFunctions
+artifacts:
+  files:
+    - ./Application/StepFunctions/updated.template
+  discard-paths: yes

@@ -1,0 +1,172 @@
+{
+  "Comment": "Image Processing workflow",
+  "StartAt": "ExtractImageMetadata",
+  "States": {
+    "ExtractImageMetadata": {
+      "Type": "Task",
+      "Resource": "${ExtractImageMetadataFunction.Arn}",
+      "InputPath": "$",
+      "ResultPath": "$.extractedMetadata",
+      "Next": "ImageTypeCheck",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PushToDeadLetterQueue",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "ImageTypeCheck": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$.extractedMetadata.Format",
+              "StringEquals": "JPEG"
+            },
+            {
+              "Variable": "$.extractedMetadata.Format",
+              "StringEquals": "PNG"
+            }
+          ],
+          "Next": "TransformMetadata"
+        }
+      ],
+      "Default": "PushToDeadLetterQueue"
+    },
+    "TransformMetadata": {
+      "Type": "Task",
+      "Resource": "${TransformMetadataFunction.Arn}",
+      "InputPath": "$.extractedMetadata",
+      "ResultPath": "$.extractedMetadata",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "PushToDeadLetterQueue",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "ParallelProcessing"
+    },
+    "ParallelProcessing": {
+      "Type": "Parallel",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "PushToDeadLetterQueue",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Branches": [
+        {
+          "StartAt": "Rekognition",
+          "States": {
+            "Rekognition": {
+              "Type": "Task",
+              "Resource": "${RekognitionFunction.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.5
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Thumbnail",
+          "States": {
+            "Thumbnail": {
+              "Type": "Task",
+              "Resource": "${GenerateThumbnailFunction.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.5
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.parallelResults",
+      "Next": "StoreImageMetadata"
+    },
+    "StoreImageMetadata": {
+      "Type": "Task",
+      "Resource": "${StoreImageMetadataFunction.Arn}",
+      "InputPath": "$",
+      "ResultPath": "$.storeResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "PushToDeadLetterQueue",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 1.5
+        }
+      ],
+      "End": true
+    },
+    "PushToDeadLetterQueue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${ProcessStateMachineDLQ}",
+        "MessageBody.$": "$"
+      },
+      "Next": "FailWorkflow"
+    },
+    "FailWorkflow": {
+      "Type": "Fail",
+      "Cause": "Backend image processing failed",
+      "Error": "States.ALL"
+    }
+  }
+}
